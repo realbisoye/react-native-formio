@@ -13,6 +13,7 @@ export default class ValueComponent extends BaseComponent {
     const valid = this.validate(value);
     this.state = {
       open: false,
+      showSignaturePad: false,
       value: value,
       isValid: valid.isValid,
       errorType: valid.errorType,
@@ -23,11 +24,11 @@ export default class ValueComponent extends BaseComponent {
       this.state = this.customState(this.state);
     }
     this.data = {};
-    this.validate =this.validate.bind(this);
-    this.onChange =this.onChange.bind(this);
-    this.setValue =this.setValue.bind(this);
-    this.getDisplay =this.getDisplay.bind(this);
-    this.getElements =this.getElements.bind(this);
+    this.validate = this.validate.bind(this);
+    this.onChange = this.onChange.bind(this);
+    this.setValue = this.setValue.bind(this);
+    this.getDisplay = this.getDisplay.bind(this);
+    this.getElements = this.getElements.bind(this);
   }
 
   componentDidMount() {
@@ -66,7 +67,7 @@ export default class ValueComponent extends BaseComponent {
         }
       }
     }
-    if (prevProps.value && prevProps.value.item !== this.props.value.item) {
+    if (this.props.value && prevProps.value && prevProps.value.item !== this.props.value.item) {
       value = safeSingleToMultiple(this.props.value, this.props.component);
     }
     // This occurs when a datagrid row is deleted.
@@ -118,8 +119,7 @@ export default class ValueComponent extends BaseComponent {
     else {
       newValue = value;
     }
-    const validatedValue =this.validate(newValue);
-
+    const validatedValue = this.validate(newValue);
     this.setState({
       isPristine: !!pristine,
       value: validatedValue,

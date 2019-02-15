@@ -3,6 +3,7 @@ import {Text, ScrollView, StyleSheet, View, ActivityIndicator} from 'react-nativ
 import PropTypes from 'prop-types';
 import Formiojs from '../formio';
 import FormioUtils from '../formio/utils';
+import {ErrorTypes} from '../util/constants';
 import {FormioComponentsList} from '../components';
 import clone from 'lodash/clone';
 import theme from '../defaultTheme';
@@ -68,7 +69,9 @@ export default class Formio extends React.Component {
     this.showAlert = this.showAlert.bind(this);
     this.setPristine = this.setPristine.bind(this);
     this.onSubmit = this.onSubmit.bind(this);
+    this.onSave = this.onSave.bind(this);
     this.resetForm = this.resetForm.bind(this);
+    this.errorResponse = this.errorResponse.bind(this);
   }
 
   componentDidUpdate() {
@@ -94,11 +97,32 @@ export default class Formio extends React.Component {
       this.formio = new Formiojs(this.props.src);
       this.formio.loadForm().then((form) => {
         this.loadForm(form);
+      })
+      .catch((error) => {
+        if (this.props.onFormError) {
+          this.props.onFormError({
+            type: ErrorTypes.FormFetchError,
+            message: this.errorResponse(error)
+          });
+        }
+        this.setState({
+          isLoading: false,
+        });
       });
 
-      if (this.formio.submission) {
-        this.formio.loadSubmission().then((submission) => {
+      if (this.form && this.props.submissionId) {
+        this.formio.submissionId = this.props.submissionId;
+        this.formio.submissionUrl = `${this.props.src}/submission/${this.props.submissionId}`;
+        this.formio.loadSubmission()
+        .then((submission) => {
           this.loadSubmission(submission);
+        }).catch((e) => {
+          if (this.props.onFormError) {
+            this.props.onFormError({
+              type: ErrorTypes.SubmissionFetchError,
+              message: this.errorResponse(e)
+           });
+          }
         });
       }
     }
@@ -165,14 +189,22 @@ export default class Formio extends React.Component {
       isSubmitting: false,
       alerts: [{
         type: 'success',
-        message: 'Submission was ' + ((method === 'put') ? 'updated' : 'created')
+        message: `Submission was ${method === 'put' ? 'updated' : 'created'}`
       }]
     });
   }
 
+  errorResponse(value) {
+    const message = typeof value === 'string' ? value : JSON.stringify(value);
+    return message;
+  }
+
   submissionError(response) {
     if (typeof this.props.onFormError === 'function') {
-      this.props.onFormError(response);
+      this.props.onFormError({
+        type: ErrorTypes.SubmissionError,
+        message: this.errorResponse(response)
+      });
     }
     this.setState({
       isSubmitting: false
@@ -247,7 +279,7 @@ export default class Formio extends React.Component {
     let allIsValid = true;
     const inputs = this.inputs;
     Object.keys(inputs).forEach((name) => {
-      if (!inputs[name].state.isValid) {
+      if (inputs[name].state.value && !inputs[name].state.value.isValid) {
         allIsValid = false;
       }
     });
@@ -328,19 +360,26 @@ export default class Formio extends React.Component {
 
   onSubmit(event) {
     event.preventDefault();
-
     this.setPristine(false);
     if (!this.state.isValid) {
       this.showAlert('danger', 'Please fix the following errors before submitting.', true);
+      if (this.props.onFormError) {
+        this.props.onFormError({
+          type: 'ValidationError',
+          message: 'Please fix all errors before submitting.',
+        });
+      }
       return;
     }
+
+    const sub = this.state.submission;
+    sub.data = clone(this.data);
+    sub.state = 'submitted';
 
     this.setState({
       alerts: [],
       isSubmitting: true
     });
-    const sub = this.state.submission;
-    sub.data = clone(this.data);
 
     let request;
     let method;
@@ -372,19 +411,50 @@ export default class Formio extends React.Component {
     }
   }
 
-  resetForm() {
-    this.setState((previousState) => {
-      for (let key in previousState.submission.data) {
-        delete previousState.submission.data[key];
+  onSave() {
+    const sub = this.state.submission;
+    sub.data = clone(this.data);
+    sub.state = 'draft';
+
+    this.setState({
+      alerts: [],
+      isSubmitting: true
+    });
+
+    this.formio.saveSubmission(sub).then((submission) => {
+      if (typeof this.props.onFormSave === 'function') {
+        this.props.onFormSave(submission);
       }
-      return previousState;
+      this.setState({
+        alerts: [{
+          type: 'success',
+          message: 'Submission was saved',
+        }],
+        isSubmitting: false
+      });
     });
   }
 
-  render() {
-    if (!this.state.form || !this.state.form.components) {
-      return null;
+  resetForm() {
+    const submission = this.state.submission;
+    for (let key in submission.data) {
+      delete submission.data[key];
     }
+
+    Object.keys(this.inputs).forEach((name) => {
+      if (typeof this.inputs[name].setValue === 'function') {
+        this.inputs[name].setValue(null);
+      }
+    });
+    this.setState({
+      submission,
+    });
+    this.data = {};
+    this.setPristine(true);
+  }
+
+  render() {
+    const {isLoading} = this.state;
 
     const style = StyleSheet.create({
       formWrapper: {
@@ -399,7 +469,6 @@ export default class Formio extends React.Component {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        marginTop: '40%'
       },
       loading: {
         flex: 1,
@@ -421,6 +490,20 @@ export default class Formio extends React.Component {
       }
     });
 
+    if (isLoading) {
+      return (<View style={style.loadingContainer}>
+        <ActivityIndicator
+          size="large"
+          color={this.props.colors.primary1Color}
+          style={style.loading}
+        />
+      </View>);
+    }
+
+    if (!isLoading && (!this.state.form  || !this.state.form.components)) {
+      return null;
+    }
+
     const components = this.state.form.components;
     const alerts = this.state.alerts.map((alert, index) => {
       let message;
@@ -437,20 +520,9 @@ export default class Formio extends React.Component {
       </View>);
     });
 
-    const loading = (
-      <View style={style.loadingContainer}>
-        <ActivityIndicator
-          size="large"
-          color={this.props.colors.primary1Color}
-          style={style.loading}
-        />
-      </View>
-    );
-
     return (
       <ScrollView style={style.formWrapper} contentContainerStyle={style.contentContainerStyle}>
-        {this.state.isLoading && loading}
-        {!this.state.isLoading && <FormioComponentsList
+       <FormioComponentsList
           components={components}
           values={this.data}
           options={this.props.options}
@@ -460,18 +532,19 @@ export default class Formio extends React.Component {
           isFormValid={this.state.isValid}
           onElementRender={this.props.onElementRender}
           theme={this.props.theme}
-          colors={this.props.colors}
+          colors={{...colors, ...this.props.colors}}
           resetForm={this.resetForm}
           formio={this.formio}
           data={this.data}
           onSubmit={this.onSubmit}
+          onSave={this.onSave}
           onChange={this.onChange}
           onEvent={this.onEvent}
           isDisabled={this.isDisabled}
           checkConditional={this.checkConditional}
           showAlert={this.showAlert}
           formPristine={this.state.isPristine}
-        />}
+        />
         {this.props.options.showAlerts && alerts}
       </ScrollView>
     );
@@ -510,6 +583,7 @@ Formio.propTypes = {
   onFormLoad: PropTypes.func,
   onSubmissionLoad: PropTypes.func,
   onFormSubmit: PropTypes.func,
+  onFormSave: PropTypes.func,
   onChange: PropTypes.func,
   onEvent: PropTypes.func,
   onFormError: PropTypes.func,
